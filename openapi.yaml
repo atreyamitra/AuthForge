@@ -1,0 +1,179 @@
+openapi: 3.0.3
+info:
+  title: AuthForge API
+  description: JWT authentication & RBAC microservice with TOTP-based 2FA.
+  version: 1.0.0
+servers:
+  - url: http://localhost:5000
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Service is healthy
+
+  /api/auth/register:
+    post:
+      summary: Create a new account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                role: { type: string, enum: [user, admin], default: user }
+      responses:
+        '201': { description: Account created }
+        '409': { description: Email already registered }
+        '400': { description: Validation failed }
+
+  /api/auth/login:
+    post:
+      summary: Log in with email + password
+      description: >
+        Returns an access token directly, or a `requiresTwoFactor` challenge
+        if the account has 2FA enabled — in which case call
+        /api/auth/2fa/login-verify next.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200': { description: Logged in, or 2FA challenge issued }
+        '401': { description: Invalid credentials }
+        '423': { description: Account locked }
+        '429': { description: Too many login attempts }
+
+  /api/auth/2fa/setup:
+    post:
+      summary: Begin 2FA enrollment (returns QR code)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: QR code + manual entry key returned }
+
+  /api/auth/2fa/verify:
+    post:
+      summary: Confirm 2FA enrollment with a TOTP code
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, example: '123456' }
+      responses:
+        '200': { description: 2FA enabled }
+        '400': { description: Invalid code }
+
+  /api/auth/2fa/login-verify:
+    post:
+      summary: Complete login for a 2FA-enabled account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [twoFactorToken, code]
+              properties:
+                twoFactorToken: { type: string }
+                code: { type: string, example: '123456' }
+      responses:
+        '200': { description: Logged in }
+        '401': { description: Invalid code or expired challenge }
+
+  /api/auth/2fa/disable:
+    post:
+      summary: Disable 2FA (requires a valid current code)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        '200': { description: 2FA disabled }
+
+  /api/auth/refresh:
+    post:
+      summary: Rotate refresh token, issue a new access token
+      responses:
+        '200': { description: New access token issued }
+        '401': { description: Invalid/revoked/missing refresh token }
+
+  /api/auth/logout:
+    post:
+      summary: Revoke the current session's refresh token
+      responses:
+        '204': { description: Logged out }
+
+  /api/auth/logout-all:
+    post:
+      summary: Revoke every session for the current user
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: All sessions revoked }
+
+  /api/auth/me:
+    get:
+      summary: Get the current authenticated user
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Current user profile }
+        '401': { description: Not authenticated }
+
+  /api/admin/users:
+    get:
+      summary: List all users (admin only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: List of users }
+        '403': { description: Insufficient role }
+
+  /api/admin/users/{id}/role:
+    patch:
+      summary: Change a user's role (admin only)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [guest, user, admin] }
+      responses:
+        '200': { description: Role updated }
+        '403': { description: Insufficient role }
+        '404': { description: User not found }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
