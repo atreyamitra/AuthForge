@@ -126,7 +126,8 @@ async function verifyTwoFactorLogin(req, res, next) {
     }
 
     const user = await User.findById(payload.sub).select('+twoFactorSecret');
-    if (!user || !user.twoFactorEnabled) {
+    if (!user || !user.isActive || !user.twoFactorEnabled ||
+        !Number.isSafeInteger(payload.tokenVersion) || payload.tokenVersion !== user.tokenVersion) {
       return res.status(401).json({ error: 'Invalid 2FA state for this account' });
     }
 

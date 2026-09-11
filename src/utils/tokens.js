@@ -4,7 +4,7 @@ const env = require('../config/env');
 
 function signAccessToken(user) {
   return jwt.sign(
-    { sub: user._id.toString(), role: user.role, type: 'access' },
+    { sub: user._id.toString(), role: user.role, type: 'access', tokenVersion: user.tokenVersion },
     env.jwt.accessSecret,
     { expiresIn: env.jwt.accessExpiresIn }
   );
@@ -18,7 +18,7 @@ function signAccessToken(user) {
  */
 function signTwoFactorPendingToken(user) {
   return jwt.sign(
-    { sub: user._id.toString(), type: '2fa_pending' },
+    { sub: user._id.toString(), type: '2fa_pending', tokenVersion: user.tokenVersion },
     env.jwt.accessSecret,
     { expiresIn: '5m' }
   );
@@ -35,7 +35,7 @@ function verifyTwoFactorPendingToken(token) {
 function signRefreshToken(user) {
   const jti = crypto.randomUUID();
   const token = jwt.sign(
-    { sub: user._id.toString(), type: 'refresh', jti },
+    { sub: user._id.toString(), type: 'refresh', jti, tokenVersion: user.tokenVersion },
     env.jwt.refreshSecret,
     { expiresIn: env.jwt.refreshExpiresIn }
   );
@@ -47,7 +47,12 @@ function verifyAccessToken(token) {
 }
 
 function verifyRefreshToken(token) {
-  return jwt.verify(token, env.jwt.refreshSecret);
+  const payload = jwt.verify(token, env.jwt.refreshSecret);
+  if (payload.type !== 'refresh' || typeof payload.jti !== 'string' ||
+      !Number.isSafeInteger(payload.tokenVersion) || payload.tokenVersion < 0) {
+    throw new Error('Invalid refresh token claims');
+  }
+  return payload;
 }
 
 /** Converts a JWT expiresIn-style string (e.g. "7d", "15m") to seconds. */

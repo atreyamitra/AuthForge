@@ -78,6 +78,7 @@ class User {
       passwordHash: data.passwordHash,
       role: data.role && ROLES.includes(data.role) ? data.role : 'user',
       isActive: true,
+      tokenVersion: data.tokenVersion ?? 0,
       failedLoginAttempts: 0,
       lockUntil: null,
       lastLoginAt: null,
@@ -117,7 +118,10 @@ class User {
   static async findByIdAndUpdate(id, update, opts = {}) {
     const existing = store.get(id);
     if (!existing) return null;
-    const updated = { ...existing, ...update, updatedAt: new Date() };
+    const updated = { ...existing, ...(update.$set || (update.$inc ? {} : update)), updatedAt: new Date() };
+    for (const [key, amount] of Object.entries(update.$inc || {})) {
+      updated[key] = (existing[key] || 0) + amount;
+    }
     store.set(id, updated);
     attachInstanceMethods(updated);
     return opts.new === false ? attachInstanceMethods({ ...existing }) : updated;
