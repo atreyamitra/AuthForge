@@ -118,9 +118,10 @@ describe('RBAC: /api/admin/users', () => {
   });
 
   it('allows an admin user (200)', async () => {
-    const adminRes = await request(app)
-      .post('/api/auth/register')
-      .send({ email: 'admin@example.com', password: 'AdminPass123', role: 'admin' });
+    await User.create({ email: 'admin@example.com',
+      passwordHash: await User.hashPassword('AdminPass123'), role: 'admin' });
+    const adminRes = await request(app).post('/api/auth/login')
+      .send({ email: 'admin@example.com', password: 'AdminPass123' });
     const token = adminRes.body.accessToken;
 
     const res = await request(app).get('/api/admin/users').set('Authorization', `Bearer ${token}`);
@@ -161,7 +162,6 @@ describe('POST /api/auth/logout-all', () => {
     const before = await agent.get('/api/auth/me').set('Authorization', `Bearer ${oldToken}`);
     expect(before.status).toBe(200);
 
-    await new Promise((r) => setTimeout(r, 1100)); // ensure invalidation timestamp > token iat (1s JWT resolution)
     const logoutRes = await agent
       .post('/api/auth/logout-all')
       .set('Authorization', `Bearer ${oldToken}`);

@@ -19,8 +19,8 @@ production auth patterns, not a toy login form.
 - **Account lockout** — 10 consecutive failed logins locks the account for 15
   minutes
 - **Global logout** — `/logout-all` revokes every outstanding refresh token
-  and invalidates all previously-issued access tokens for that user via a
-  Redis marker, even ones that haven't expired yet
+  and invalidates all previously-issued access tokens for that user via an atomic
+  MongoDB session-version increment, even ones that have not expired yet
 - **Structured audit logging** — every security-relevant event (login
   success/fail, lockouts, 2FA enable/disable, role changes) emits a
   structured, greppable log record via pino, ready to ship to a log
@@ -89,7 +89,7 @@ npm run test:integration  # full-stack smoke test against REAL MongoDB + Redis
 
 `npm test` covers registration, login, RBAC enforcement, refresh rotation,
 the full TOTP 2FA lifecycle (enroll → challenge → verify → disable), the
-Redis-backed login rate limiter, and global logout — 19 tests, all exercising
+Redis-backed login rate limiter, and global logout — including security regressions, all exercising
 real bcrypt hashing, real JWT signing/verification, real TOTP codes, and a
 real Redis instance.
 
@@ -115,3 +115,29 @@ src/
   utils/        JWT helpers, Joi schemas
 tests/          Jest + Supertest integration tests
 ```
+
+## Security fixes and deployment notes
+
+Public registration accepts only the ordinary `user` role; the controller also
+forces that role. Provision the first administrator through a trusted database
+operation. Do not expose a public bootstrap endpoint. Review existing admin
+accounts before deployment: this change does not automatically demote accounts
+created through the former signup vulnerability.
+
+Refresh tokens are consumed with a conditional MongoDB update (unrevoked,
+unexpired, correct owner and session version), so concurrent replays have one
+winner. A failed replacement write leaves the old token revoked; the user must
+log in again. Global logout atomically increments `User.tokenVersion`. Access,
+refresh and pending 2FA tokens carry this generation; in-flight issuance from an
+older generation cannot restore access after logout. Redis remains responsible
+for login throttling, not the session invalidation source of truth.
+
+**Rollout:** previously issued tokens without `tokenVersion` are rejected. Users
+must log in again. Deploy all instances together; mixed old/new instances do not
+provide these guarantees. Refresh cookies now use `/api/auth` so browsers send
+them to both refresh and logout endpoints. Browser logout revokes refresh access;
+an already issued access token lasts until expiry unless global logout is used.
+
+Run `npm test` against a dedicated Redis instance, then `npm run test:integration`
+with dedicated MongoDB and Redis test databases. The latter verifies conditional
+updates with real MongoDB, including concurrent refresh and global logout races.

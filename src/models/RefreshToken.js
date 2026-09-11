@@ -4,6 +4,7 @@ const refreshTokenSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     tokenId: { type: String, required: true, unique: true }, // jti claim
+    tokenVersion: { type: Number, required: true },
     revoked: { type: Boolean, default: false },
     userAgent: { type: String, default: '' },
     ip: { type: String, default: '' },

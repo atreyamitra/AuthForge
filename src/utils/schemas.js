@@ -12,7 +12,7 @@ const registerSchema = Joi.object({
       'string.min': 'Password must be at least 8 characters',
       'string.pattern.name': 'Password must contain at least one {#name}',
     }),
-  role: Joi.string().valid('user', 'admin').default('user'),
+  role: Joi.string().valid('user').default('user'),
 });
 
 const loginSchema = Joi.object({

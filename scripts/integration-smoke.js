@@ -11,6 +11,8 @@ const speakeasy = require('speakeasy');
 const { connectDB, disconnectDB } = require('../src/config/db');
 const { closeRedisClient } = require('../src/config/redis');
 const createApp = require('../src/app');
+const User = require('../src/models/User');
+const RefreshToken = require('../src/models/RefreshToken');
 
 async function fetchJson(url, opts) {
   const res = await fetch(url, opts);
@@ -55,11 +57,13 @@ async function main() {
 
     console.log('== RBAC: admin allowed ==');
     const adminEmail = `ci-admin-${Date.now()}@example.com`;
-    const adminReg = await fetchJson(`${base}/api/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: adminEmail, password: 'SmokeTest123', role: 'admin' }),
+    // Administrators are provisioned through a trusted DB operation, never signup.
+    await User.create({ email: adminEmail, passwordHash: await User.hashPassword('SmokeTest123'), role: 'admin' });
+    const adminReg = await fetchJson(`${base}/api/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: adminEmail, password: 'SmokeTest123' }),
     });
+    assert.strictEqual(adminReg.status, 200);
     const adminList = await fetchJson(`${base}/api/admin/users`, {
       headers: { Authorization: `Bearer ${adminReg.body.accessToken}` },
     });
@@ -95,6 +99,58 @@ async function main() {
     });
     assert.strictEqual(finish.status, 200, `2fa login-verify failed: ${JSON.stringify(finish.body)}`);
     assert.ok(finish.body.accessToken);
+
+    console.log('== security regressions against real persistence ==');
+    const post = (path, body, headers = {}) => fetchJson(`${base}${path}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+    const escalation = await post('/api/auth/register', {
+      email: `ci-escalation-${Date.now()}@example.com`, password: 'SmokeTest123', role: 'admin',
+    });
+    assert.strictEqual(escalation.status, 400, 'public admin signup must fail');
+    const raceEmail = `ci-race-${Date.now()}@example.com`;
+    const race = await post('/api/auth/register', { email: raceEmail, password: 'SmokeTest123' });
+    assert.strictEqual(race.status, 201);
+    const tokenFrom = response => decodeURIComponent(response.headers.getSetCookie().find(cookie => cookie.startsWith('refreshToken=') && !cookie.startsWith('refreshToken=;')).split(';')[0].split('=')[1]);
+    const originalRefresh = tokenFrom(race);
+    const rotated = await Promise.all(Array.from({ length: 20 }, () =>
+      post('/api/auth/refresh', { refreshToken: originalRefresh })));
+    assert.strictEqual(rotated.filter(r => r.status === 200).length, 1, 'one refresh winner');
+    assert.strictEqual(rotated.filter(r => r.status === 401).length, 19, 'replayed refreshes rejected');
+    const winner = rotated.find(r => r.status === 200);
+    // Logout races a refresh: any issued old-generation replacement must be unusable.
+    const [concurrentRefresh, logoutAll] = await Promise.all([
+      post('/api/auth/refresh', { refreshToken: tokenFrom(winner) }),
+      post('/api/auth/logout-all', {}, { Authorization: `Bearer ${race.body.accessToken}` }),
+    ]);
+    assert.strictEqual(logoutAll.status, 204);
+    assert.ok([200, 401].includes(concurrentRefresh.status));
+    if (concurrentRefresh.status === 200) {
+      assert.strictEqual((await fetchJson(`${base}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${concurrentRefresh.body.accessToken}` },
+      })).status, 401, 'racing access token must be invalidated');
+      assert.strictEqual((await post('/api/auth/refresh', {
+        refreshToken: tokenFrom(concurrentRefresh),
+      })).status, 401, 'racing refresh token must be invalidated');
+    }
+    const fresh = await post('/api/auth/login', { email: raceEmail, password: 'SmokeTest123' });
+    assert.strictEqual(fresh.status, 200);
+    assert.strictEqual((await fetchJson(`${base}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${fresh.body.accessToken}` },
+    })).status, 200, 'immediate login after global logout must work');
+    assert.match(fresh.headers.get('set-cookie'), /Path=\/api\/auth(?:;|$)/);
+    const freshToken = tokenFrom(fresh);
+    assert.strictEqual((await post('/api/auth/logout', {}, {
+      Cookie: `refreshToken=${encodeURIComponent(freshToken)}`,
+    })).status, 204);
+    assert.strictEqual((await post('/api/auth/refresh', { refreshToken: freshToken })).status, 401);
+    // TTL cleanup is asynchronous: an expired database record must still be rejected.
+    const expiring = await post('/api/auth/login', { email: raceEmail, password: 'SmokeTest123' });
+    const expiredToken = tokenFrom(expiring);
+    const expiredPayload = require('jsonwebtoken').decode(expiredToken);
+    await RefreshToken.updateOne({ tokenId: expiredPayload.jti }, { expiresAt: new Date(0) });
+    assert.strictEqual((await post('/api/auth/refresh', { refreshToken: expiredToken })).status, 401);
 
     console.log('\nALL INTEGRATION SMOKE CHECKS PASSED (real MongoDB + real Redis)');
   } finally {

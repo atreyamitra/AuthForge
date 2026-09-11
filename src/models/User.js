@@ -23,6 +23,7 @@ const userSchema = new mongoose.Schema(
       enum: ROLES,
       default: 'user',
     },
+    tokenVersion: { type: Number, default: 0 },
     isActive: {
       type: Boolean,
       default: true,
