@@ -149,6 +149,27 @@ describe('POST /api/auth/refresh (rotation)', () => {
     const res = await request(app).post('/api/auth/refresh').send();
     expect(res.status).toBe(401);
   });
+
+  it('allows exactly one rotation when the same refresh cookie is replayed by 20 concurrent requests', async () => {
+    const registerRes = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'race@example.com', password: 'StrongPass123' });
+    const cookie = registerRes.headers['set-cookie'];
+
+    const requests = Array.from({ length: 20 }, () =>
+      request(app).post('/api/auth/refresh').set('Cookie', cookie).send()
+    );
+    const responses = await Promise.all(requests);
+
+    const succeeded = responses.filter((r) => r.status === 200).length;
+    const rejected = responses.filter((r) => r.status === 401).length;
+
+    // The stored refresh token is revoked on first use; every other
+    // concurrent replay of the same cookie must be rejected as already
+    // revoked, not silently accepted.
+    expect(succeeded).toBe(1);
+    expect(rejected).toBe(19);
+  });
 });
 
 describe('POST /api/auth/logout-all', () => {

@@ -87,9 +87,11 @@ npm test               # Jest suite — bcrypt, JWT, RBAC, 2FA, Redis rate limit
 npm run test:integration  # full-stack smoke test against REAL MongoDB + Redis
 ```
 
-`npm test` covers registration, login, RBAC enforcement, refresh rotation,
-the full TOTP 2FA lifecycle (enroll → challenge → verify → disable), the
-Redis-backed login rate limiter, and global logout — 19 tests, all exercising
+`npm test` covers registration, login, RBAC enforcement, refresh rotation
+(including a 20-concurrent-request replay test that proves exactly one
+rotation succeeds and the other 19 are rejected as already-revoked), the
+full TOTP 2FA lifecycle (enroll → challenge → verify → disable), the
+Redis-backed login rate limiter, and global logout — 20 tests, all exercising
 real bcrypt hashing, real JWT signing/verification, real TOTP codes, and a
 real Redis instance.
 
