@@ -7,7 +7,7 @@ const createApp = require('../src/app');
 const auth = require('../src/controllers/authController');
 const app = createApp();
 const credentials = { email: 'security@example.com', password: 'StrongPass123' };
-const cookieToken = res => decodeURIComponent(res.headers['set-cookie'][0].split(';')[0].split('=')[1]);
+const cookieToken = res => decodeURIComponent(res.headers['set-cookie'].find(cookie => cookie.startsWith('refreshToken=') && !cookie.startsWith('refreshToken=;')).split(';')[0].split('=')[1]);
 afterEach(() => { User.__reset(); RefreshToken.__reset(); jest.restoreAllMocks(); });
 
 test('public registration cannot create an administrator', async () => {

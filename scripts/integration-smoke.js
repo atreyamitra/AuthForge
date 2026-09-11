@@ -112,7 +112,7 @@ async function main() {
     const raceEmail = `ci-race-${Date.now()}@example.com`;
     const race = await post('/api/auth/register', { email: raceEmail, password: 'SmokeTest123' });
     assert.strictEqual(race.status, 201);
-    const tokenFrom = response => decodeURIComponent(response.headers.get('set-cookie').split(';')[0].split('=')[1]);
+    const tokenFrom = response => decodeURIComponent(response.headers.getSetCookie().find(cookie => cookie.startsWith('refreshToken=') && !cookie.startsWith('refreshToken=;')).split(';')[0].split('=')[1]);
     const originalRefresh = tokenFrom(race);
     const rotated = await Promise.all(Array.from({ length: 20 }, () =>
       post('/api/auth/refresh', { refreshToken: originalRefresh })));

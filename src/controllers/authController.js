@@ -34,9 +34,9 @@ async function issueTokenPair(user, req, res) {
     expiresAt: new Date(Date.now() + expiresInToSeconds(env.jwt.refreshExpiresIn) * 1000),
   });
 
-  res.cookie(REFRESH_COOKIE_NAME, refreshToken, refreshCookieOptions());
-  // Remove the legacy narrower cookie so it cannot shadow the new cookie.
+  // Expire the legacy narrower cookie before setting its replacement.
   res.clearCookie(REFRESH_COOKIE_NAME, { path: '/api/auth/refresh' });
+  res.cookie(REFRESH_COOKIE_NAME, refreshToken, refreshCookieOptions());
   return accessToken;
 }
 
