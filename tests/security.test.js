@@ -1,5 +1,4 @@
 const request = require('supertest');
-const jwt = require('jsonwebtoken');
 jest.mock('../src/models/User');
 jest.mock('../src/models/RefreshToken');
 const User = require('../src/models/User');
@@ -18,7 +17,7 @@ test('public registration cannot create an administrator', async () => {
 });
 
 test('controller forces an ordinary role even without request validation', async () => {
-  const res = { cookie: jest.fn(), status: jest.fn().mockReturnThis(), json: jest.fn() };
+  const res = { cookie: jest.fn(), clearCookie: jest.fn(), status: jest.fn().mockReturnThis(), json: jest.fn() };
   const next = jest.fn();
   await auth.register({ body: { ...credentials, role: 'admin' }, headers: {}, ip: '127.0.0.1' }, res, next);
   expect(next).not.toHaveBeenCalled();
@@ -29,7 +28,7 @@ test('concurrent use of the same refresh token issues exactly one replacement', 
   const reg = await request(app).post('/api/auth/register').send(credentials);
   const token = cookieToken(reg);
   const responses = Array.from({ length: 10 }, () => ({
-    cookie: jest.fn(), status: jest.fn().mockReturnThis(), json: jest.fn(),
+    cookie: jest.fn(), clearCookie: jest.fn(), status: jest.fn().mockReturnThis(), json: jest.fn(),
   }));
   const errors = [];
   await Promise.all(responses.map(res => auth.refresh({
@@ -60,4 +59,25 @@ test('logout-all invalidates old sessions but allows immediate same-second login
   expect((await request(app).get('/api/auth/me').set('Authorization', `Bearer ${login.body.accessToken}`)).status).toBe(200);
   expect((await request(app).post('/api/auth/refresh').send({ refreshToken: oldRefresh })).status).toBe(401);
   clock.mockRestore();
+});
+
+
+test('login removes the old narrow cookie without removing the new auth cookie', async () => {
+  const agent = request.agent(app);
+  await agent.post('/api/auth/register').send(credentials);
+  const login = await agent.post('/api/auth/login').send(credentials);
+  const cookies = login.headers['set-cookie'];
+  expect(cookies.some(cookie => /Path=\/api\/auth;/.test(cookie) && !/Expires=Thu, 01 Jan 1970/.test(cookie))).toBe(true);
+  expect(cookies.some(cookie => /Path=\/api\/auth\/refresh;/.test(cookie) && /Expires=Thu, 01 Jan 1970/.test(cookie))).toBe(true);
+  expect((await agent.post('/api/auth/refresh').send()).status).toBe(200);
+});
+
+test('logout reports a database failure instead of falsely confirming revocation', async () => {
+  const reg = await request(app).post('/api/auth/register').send(credentials);
+  const token = cookieToken(reg);
+  const update = jest.spyOn(RefreshToken, 'updateOne').mockRejectedValueOnce(new Error('test database unavailable'));
+  expect((await request(app).post('/api/auth/logout').send({ refreshToken: token })).status).toBe(500);
+  update.mockRestore();
+  expect((await request(app).post('/api/auth/logout').send({ refreshToken: token })).status).toBe(204);
+  expect((await request(app).post('/api/auth/refresh').send({ refreshToken: token })).status).toBe(401);
 });

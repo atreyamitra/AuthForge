@@ -35,6 +35,8 @@ async function issueTokenPair(user, req, res) {
   });
 
   res.cookie(REFRESH_COOKIE_NAME, refreshToken, refreshCookieOptions());
+  // Remove the legacy narrower cookie so it cannot shadow the new cookie.
+  res.clearCookie(REFRESH_COOKIE_NAME, { path: '/api/auth/refresh' });
   return accessToken;
 }
 
@@ -150,14 +152,20 @@ async function logout(req, res, next) {
   try {
     const token = req.cookies?.[REFRESH_COOKIE_NAME] || req.body?.refreshToken;
     if (token) {
+      let payload;
       try {
-        const payload = verifyRefreshToken(token);
-        await RefreshToken.updateOne({ tokenId: payload.jti }, { revoked: true });
+        payload = verifyRefreshToken(token);
       } catch {
-        // token already invalid/expired — nothing to revoke, ignore
+        // An invalid or expired token needs no server-side revocation.
+      }
+      if (payload) {
+        // Storage failures must reach the error handler; do not report logout
+        // success while the refresh token is still usable.
+        await RefreshToken.updateOne({ tokenId: payload.jti }, { revoked: true });
       }
     }
     res.clearCookie(REFRESH_COOKIE_NAME, { path: '/api/auth' });
+    res.clearCookie(REFRESH_COOKIE_NAME, { path: '/api/auth/refresh' });
     return res.status(204).send();
   } catch (err) {
     next(err);
@@ -177,6 +185,7 @@ async function logoutAll(req, res, next) {
       { $set: { revoked: true } }
     );
     res.clearCookie(REFRESH_COOKIE_NAME, { path: '/api/auth' });
+    res.clearCookie(REFRESH_COOKIE_NAME, { path: '/api/auth/refresh' });
     auditLog('logout_all', { userId: req.user._id.toString() });
     return res.status(204).send();
   } catch (err) {
