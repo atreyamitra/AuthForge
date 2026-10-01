@@ -7,7 +7,8 @@ function getRedisClient() {
 
   const Redis = require('ioredis');
   client = new Redis(env.redisUrl, {
-    maxRetriesPerRequest: 3,
+    maxRetriesPerRequest: 1,
+    commandTimeout: 2000,
     lazyConnect: false,
   });
   client.on('error', (err) => console.error('[redis] error', err.message));

@@ -1,4 +1,5 @@
 const speakeasy = require('speakeasy');
+const { verifyAndConsumeTotp } = require('../utils/totp');
 const qrcode = require('qrcode');
 const User = require('../models/User');
 const { auditLog } = require('../utils/audit');
@@ -16,6 +17,11 @@ const {
  */
 async function setupTwoFactor(req, res, next) {
   try {
+    // Replacing the secret of an already-enrolled account would let a stolen
+    // access token swap in an attacker-known seed; disable first (needs password + code).
+    if (req.user.twoFactorEnabled) {
+      return res.status(409).json({ error: '2FA is already enabled; disable it first' });
+    }
     const secret = speakeasy.generateSecret({
       name: `AuthForge (${req.user.email})`,
       length: 20,
@@ -48,12 +54,7 @@ async function verifyTwoFactorSetup(req, res, next) {
       return res.status(400).json({ error: 'No pending 2FA setup found. Call /2fa/setup first.' });
     }
 
-    const valid = speakeasy.totp.verify({
-      secret: user.twoFactorSecret,
-      encoding: 'base32',
-      token: code,
-      window: 1, // tolerate 1 step (~30s) of clock drift
-    });
+    const valid = await verifyAndConsumeTotp(user._id, user.twoFactorSecret, code);
 
     if (!valid) {
       auditLog('2fa_setup_failed', { userId: req.user._id.toString() });
@@ -71,19 +72,19 @@ async function verifyTwoFactorSetup(req, res, next) {
 
 async function disableTwoFactor(req, res, next) {
   try {
-    const { code } = req.body;
-    const user = await User.findById(req.user._id).select('+twoFactorSecret');
+    const { code, password } = req.body;
+    const user = await User.findById(req.user._id).select('+twoFactorSecret +passwordHash');
 
     if (!user.twoFactorEnabled) {
       return res.status(400).json({ error: '2FA is not enabled on this account' });
     }
 
-    const valid = speakeasy.totp.verify({
-      secret: user.twoFactorSecret,
-      encoding: 'base32',
-      token: code,
-      window: 1,
-    });
+    // Re-authentication: a stolen access token alone must not be able to turn 2FA off.
+    if (!(await user.comparePassword(password))) {
+      return res.status(401).json({ error: 'Invalid password' });
+    }
+
+    const valid = await verifyAndConsumeTotp(user._id, user.twoFactorSecret, code);
 
     if (!valid) {
       return res.status(400).json({ error: 'Invalid code' });
@@ -130,12 +131,7 @@ async function verifyTwoFactorLogin(req, res, next) {
       return res.status(401).json({ error: 'Invalid 2FA state for this account' });
     }
 
-    const valid = speakeasy.totp.verify({
-      secret: user.twoFactorSecret,
-      encoding: 'base32',
-      token: code,
-      window: 1,
-    });
+    const valid = await verifyAndConsumeTotp(user._id, user.twoFactorSecret, code);
 
     if (!valid) {
       auditLog('2fa_login_failed', { userId: user._id.toString() });
@@ -145,6 +141,7 @@ async function verifyTwoFactorLogin(req, res, next) {
     // Delegate to the same token-issuance path the password login uses.
     const { issueTokenPair } = require('./authController')._internal;
     const accessToken = await issueTokenPair(user, req, res);
+    if (req.resetRateLimit) await req.resetRateLimit().catch(() => {});
 
     auditLog('2fa_login_success', { userId: user._id.toString() });
     return res.json({ user, accessToken });

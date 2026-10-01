@@ -1,6 +1,8 @@
 const express = require('express');
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const validate = require('../middleware/validate');
+const { roleChangeSchema } = require('../utils/schemas');
 const User = require('../models/User');
 const { auditLog } = require('../utils/audit');
 
@@ -22,10 +24,10 @@ router.get('/admin/users', authenticate, authorize('admin'), async (req, res, ne
 });
 
 // Admin-only: change a user's role
-router.patch('/admin/users/:id/role', authenticate, authorize('admin'), async (req, res, next) => {
+router.patch('/admin/users/:id/role', authenticate, authorize('admin'), validate(roleChangeSchema), async (req, res, next) => {
   try {
     const { role } = req.body;
-    const user = await User.findByIdAndUpdate(req.params.id, { role }, { new: true });
+    const user = await User.findByIdAndUpdate(req.params.id, { role }, { new: true, runValidators: true });
     if (!user) return res.status(404).json({ error: 'User not found' });
     auditLog('role_changed', {
       targetUserId: req.params.id,

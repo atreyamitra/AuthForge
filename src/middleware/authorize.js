@@ -9,11 +9,7 @@ function authorize(...allowedRoles) {
       return res.status(401).json({ error: 'Not authenticated' });
     }
     if (!allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({
-        error: 'Forbidden: insufficient role',
-        required: allowedRoles,
-        actual: req.user.role,
-      });
+      return res.status(403).json({ error: 'Forbidden: insufficient role' });
     }
     next();
   };

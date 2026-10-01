@@ -43,6 +43,17 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Incremented on global logout. Every token carries the value it was minted
+    // under; a mismatch means the token predates the logout. Server-controlled only.
+    sessionVersion: {
+      type: Number,
+      default: 0,
+    },
+    // Last TOTP time step accepted for this user; codes for steps <= this are rejected (replay).
+    twoFactorLastStep: {
+      type: Number,
+      default: 0,
+    },
     twoFactorSecret: {
       type: String,
       default: null,
@@ -69,6 +80,10 @@ userSchema.set('toJSON', {
   transform: (_doc, ret) => {
     delete ret.passwordHash;
     delete ret.twoFactorSecret;
+    delete ret.twoFactorLastStep;
+    delete ret.sessionVersion;
+    delete ret.failedLoginAttempts;
+    delete ret.lockUntil;
     delete ret.__v;
     return ret;
   },

@@ -1,4 +1,4 @@
-version: "3.9"
+
 
 services:
   auth-service:
@@ -11,8 +11,8 @@ services:
       PORT: 5000
       MONGO_URI: mongodb://mongo:27017/authforge
       REDIS_URL: redis://redis:6379
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-change_me_access}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change_me_refresh}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET (>=32 chars) in .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET (>=32 chars, different) in .env}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:3000}
     depends_on:
       - mongo
@@ -22,8 +22,6 @@ services:
   mongo:
     image: mongo:7
     container_name: authforge-mongo
-    ports:
-      - "27017:27017"
     volumes:
       - mongo-data:/data/db
     restart: unless-stopped
@@ -31,8 +29,6 @@ services:
   redis:
     image: redis:7-alpine
     container_name: authforge-redis
-    ports:
-      - "6379:6379"
     volumes:
       - redis-data:/data
     restart: unless-stopped

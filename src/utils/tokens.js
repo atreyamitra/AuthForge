@@ -2,52 +2,59 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const env = require('../config/env');
 
-function signAccessToken(user) {
+const ALG = 'HS256';
+const VERIFY_OPTS = { algorithms: [ALG] };
+
+/** `sv` = sessionVersion the token belongs to; compared against the user's current value. */
+function signAccessToken(user, sessionVersion = user.sessionVersion) {
   return jwt.sign(
-    { sub: user._id.toString(), role: user.role, type: 'access' },
+    { sub: user._id.toString(), role: user.role, type: 'access', sv: sessionVersion },
     env.jwt.accessSecret,
-    { expiresIn: env.jwt.accessExpiresIn }
+    { algorithm: ALG, expiresIn: env.jwt.accessExpiresIn }
   );
 }
 
 /**
  * Short-lived, single-purpose token issued after a correct password check
  * for a 2FA-enabled account. It proves "password was correct" without
- * granting any actual access — it can only be redeemed at
- * POST /api/auth/2fa/login-verify, and only within 5 minutes.
+ * granting any actual access; it is only redeemable at /2fa/login-verify.
  */
 function signTwoFactorPendingToken(user) {
   return jwt.sign(
     { sub: user._id.toString(), type: '2fa_pending' },
     env.jwt.accessSecret,
-    { expiresIn: '5m' }
+    { algorithm: ALG, expiresIn: '5m' }
   );
 }
 
 function verifyTwoFactorPendingToken(token) {
-  const payload = jwt.verify(token, env.jwt.accessSecret);
+  const payload = jwt.verify(token, env.jwt.accessSecret, VERIFY_OPTS);
   if (payload.type !== '2fa_pending') {
     throw new Error('Wrong token type');
   }
   return payload;
 }
 
-function signRefreshToken(user) {
+function signRefreshToken(user, { family, sessionVersion }) {
   const jti = crypto.randomUUID();
   const token = jwt.sign(
-    { sub: user._id.toString(), type: 'refresh', jti },
+    { sub: user._id.toString(), type: 'refresh', jti, fam: family, sv: sessionVersion },
     env.jwt.refreshSecret,
-    { expiresIn: env.jwt.refreshExpiresIn }
+    { algorithm: ALG, expiresIn: env.jwt.refreshExpiresIn }
   );
   return { token, jti };
 }
 
 function verifyAccessToken(token) {
-  return jwt.verify(token, env.jwt.accessSecret);
+  return jwt.verify(token, env.jwt.accessSecret, VERIFY_OPTS);
 }
 
 function verifyRefreshToken(token) {
-  return jwt.verify(token, env.jwt.refreshSecret);
+  const payload = jwt.verify(token, env.jwt.refreshSecret, VERIFY_OPTS);
+  if (payload.type !== 'refresh') {
+    throw new Error('Wrong token type');
+  }
+  return payload;
 }
 
 /** Converts a JWT expiresIn-style string (e.g. "7d", "15m") to seconds. */

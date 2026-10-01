@@ -5,6 +5,8 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY src ./src
+COPY scripts ./scripts
+COPY openapi.yaml ./openapi.yaml
 
 ENV NODE_ENV=production
 EXPOSE 5000

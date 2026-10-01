@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'claude/**']
   pull_request:
     branches: [main]
 
@@ -10,13 +10,15 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # Real services. The test suite connects to them in beforeAll and FAILS
+    # (never skips) if either is unreachable.
     services:
       mongo:
         image: mongo:7
         ports:
           - 27017:27017
         options: >-
-          --health-cmd "mongosh --eval 'db.runCommand({ ping: 1 })'"
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -32,25 +34,46 @@ jobs:
           --health-retries 5
 
     env:
-      NODE_ENV: development
-      MONGO_URI: mongodb://localhost:27017/authforge_ci
+      MONGO_URI: mongodb://localhost:27017/authforge_test
       REDIS_URL: redis://localhost:6379
-      JWT_ACCESS_SECRET: ci_access_secret_${{ github.run_id }}
-      JWT_REFRESH_SECRET: ci_refresh_secret_${{ github.run_id }}
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
 
-      - name: Run unit/integration tests (in-memory model doubles)
-        run: npm test
+      - name: Verify service versions
+        run: |
+          redis-cli -h localhost info server | grep redis_version
+          node -e "require('mongoose').connect(process.env.MONGO_URI).then(async m=>{console.log('mongod', (await m.connection.db.admin().serverInfo()).version);process.exit(0)})"
 
-      - name: Run full-stack smoke test against real MongoDB + Redis
-        run: npm run test:integration
+      - name: Test (unit, MongoDB/Redis integration, concurrency, security regression)
+        run: npm test -- --ci
+
+      - name: Dependency audit (production deps)
+        run: npm audit --omit=dev --audit-level=high
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose up and /health
+        env:
+          JWT_ACCESS_SECRET: ci-access-secret-0123456789-abcdefghijklmnop
+          JWT_REFRESH_SECRET: ci-refresh-secret-9876543210-ponmlkjihgfedcba
+        run: |
+          docker compose up -d --build
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:5000/health && break || sleep 2
+          done
+          curl -fsS http://localhost:5000/health
+          curl -fsS -X POST http://localhost:5000/api/auth/register -H 'Content-Type: application/json' \
+            -d '{"email":"smoke@example.com","password":"SmokeTest123","role":"admin"}' -o /dev/null -w '%{http_code}\n' | grep -q 400
+          docker compose logs auth-service | tail -20
+          docker compose down -v

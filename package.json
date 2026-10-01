@@ -1,5 +1,5 @@
 {
-  "name": "auth-service",
+  "name": "authforge",
   "version": "1.0.0",
   "description": "",
   "main": "src/server.js",
@@ -7,7 +7,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "test": "cross-env NODE_ENV=test jest --runInBand",
-    "test:integration": "cross-env NODE_ENV=development node scripts/integration-smoke.js"
+    "create-admin": "node scripts/create-admin.js"
   },
   "keywords": [],
   "author": "",
@@ -34,9 +34,7 @@
   },
   "devDependencies": {
     "cross-env": "^10.1.0",
-    "ioredis-mock": "^8.13.1",
     "jest": "^30.4.2",
-    "mongodb-memory-server": "^11.2.0",
     "nodemon": "^3.1.14",
     "supertest": "^7.2.2"
   }
