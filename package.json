@@ -25,7 +25,6 @@
     "js-yaml": "^5.4.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.9.4",
-    "morgan": "^1.11.0",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
     "qrcode": "^1.5.4",
