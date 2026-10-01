@@ -16,7 +16,7 @@ See [SECURITY_MODEL.md](SECURITY_MODEL.md) for the full table, attackers and lim
 |---|---|---|
 | Public signup cannot create admin / set privileged fields | no `role` in schema, unknown keys -> 400, role fixed to `user` | `tests/registration.security.test.js` |
 | Exactly one concurrent refresh wins | conditional `findOneAndUpdate` on `{revoked:false}` | `tests/refresh.concurrency.test.js` (24 concurrent; 2 processes) |
-| Consumed refresh token can't be reused; logout revokes the session family | `revoked` flag + `family` | `refresh.concurrency` |
+| Consumed refresh tokens cannot be reused; ordinary logout revokes its session state, while `/logout-all` uses `sessionVersion` for immediate global invalidation | `revoked` flag + `family`; `sessionVersion` | `refresh.concurrency` |
 | Global logout invalidates access + refresh tokens, race-safe | `sessionVersion` in MongoDB; successor inherits consumed token's `sv` | `refresh.concurrency` (30 logout-vs-refresh races) |
 | JWT: HS256 pinned, expiry, token type, secrets required (>=32 chars, distinct) | `src/utils/tokens.js`, `src/config/env.js` | `tests/auth-flow.test.js` |
 | Role from database each request | `authenticate` loads the user | `auth-flow` (tampered claim, demotion) |
