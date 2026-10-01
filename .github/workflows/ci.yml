@@ -48,11 +48,6 @@ jobs:
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
 
-      - name: Verify service versions
-        run: |
-          redis-cli -h localhost info server | grep redis_version
-          node -e "require('mongoose').connect(process.env.MONGO_URI).then(async m=>{console.log('mongod', (await m.connection.db.admin().serverInfo()).version);process.exit(0)})"
-
       - name: Test (unit, MongoDB/Redis integration, concurrency, security regression)
         run: npm test -- --ci
 

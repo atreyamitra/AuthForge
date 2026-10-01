@@ -16,4 +16,4 @@
 "AuthForge is a small auth service I hardened after auditing it myself. I found that signup could create admins and that my 'concurrent refresh' test only ran against mocks. I fixed signup, made refresh rotation a single atomic MongoDB update, moved global logout to a session version, and rewrote the tests to run against real MongoDB and Redis, including a test that races 24 refreshes across two processes. Then I disabled each protection to check the tests really catch it. The README lists what it doesn't protect against."
 
 ## Claims NOT to use
-"Secure/production-grade authentication", "prevents token theft", "handles X requests/sec", any user/production-usage numbers, the old README's "49 tests"-style counts, and the old claim that concurrency was proven by tests that used in-memory model doubles.
+"Secure/production-grade authentication", "prevents token theft", "handles X requests/sec", any user/production-usage numbers, the old README's "20 tests" count, and the old claim that concurrency was proven by tests that used in-memory model doubles.
