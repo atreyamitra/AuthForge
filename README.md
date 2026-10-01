@@ -1,119 +1,80 @@
-# AuthForge — Auth & Access Control Microservice
+# AuthForge
 
-A standalone authentication/authorization microservice: the kind of thing that
-sits in front of other apps and handles who-can-do-what. Built to demonstrate
-production auth patterns, not a toy login form.
+A small Node.js/Express authentication service (JWT access + rotating refresh tokens, RBAC, TOTP 2FA, Redis-backed throttling) whose security-relevant behaviour is tested against a real MongoDB and a real Redis.
 
-## Features
+## What is technically interesting
+* **Atomic refresh-token rotation in MongoDB**: one conditional `findOneAndUpdate` decides the winner; tested with 24 concurrent requests, including across two separate Node processes sharing one MongoDB.
+* **Server-side fixed signup role**: public registration can only create `user`; extra fields (including `role`) are rejected.
+* **`sessionVersion` global logout** that invalidates access *and* refresh tokens immediately and is race-safe against concurrent refresh.
+* **Single-use TOTP codes** (replay-protected with a conditional update) with a per-user Redis throttle.
+* A suite with no database mocks, plus a record of mutation checks showing the tests catch removal of each protection.
 
-- **JWT auth** — short-lived access tokens + long-lived refresh tokens
-- **Refresh token rotation** — every refresh issues a new pair and revokes the
-  old one; revoked/reused tokens are rejected via a Mongo-backed token record
-- **TOTP-based 2FA** — enroll via QR code (Google Authenticator/Authy/1Password
-  compatible), enforced at login as a second step, with a disable flow that
-  itself requires a valid code
-- **RBAC** — `guest` / `user` / `admin` roles enforced via middleware
-  (`authorize('admin')`) on protected routes
-- **Brute-force protection** — Redis-backed login rate limiter, keyed on
-  email + IP, independent of the general API rate limiter
-- **Account lockout** — 10 consecutive failed logins locks the account for 15
-  minutes
-- **Global logout** — `/logout-all` revokes every outstanding refresh token
-  and invalidates all previously-issued access tokens for that user via a
-  Redis marker, even ones that haven't expired yet
-- **Structured audit logging** — every security-relevant event (login
-  success/fail, lockouts, 2FA enable/disable, role changes) emits a
-  structured, greppable log record via pino, ready to ship to a log
-  aggregator
-- **API documentation** — OpenAPI 3.0 spec served at `/api/docs` via Swagger UI
-- **CI pipeline** — GitHub Actions runs the Jest suite plus a full-stack smoke
-  test against *real* MongoDB and Redis service containers on every push
-- **Security headers & hardening** — helmet, strict CORS, small JSON body
-  limit, httpOnly/secure/sameSite refresh cookie
-- **Input validation** — Joi schemas on every mutating route
-- **Containerized** — Dockerfile + docker-compose (service + MongoDB + Redis)
+## Security properties (each backed by a test)
+See [SECURITY_MODEL.md](SECURITY_MODEL.md) for the full table, attackers and limitations, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for flows and failure semantics.
 
-## Stack
+| Property | Implementation | Test |
+|---|---|---|
+| Public signup cannot create admin / set privileged fields | no `role` in schema, unknown keys -> 400, role fixed to `user` | `tests/registration.security.test.js` |
+| Exactly one concurrent refresh wins | conditional `findOneAndUpdate` on `{revoked:false}` | `tests/refresh.concurrency.test.js` (24 concurrent; 2 processes) |
+| Consumed refresh token can't be reused; logout revokes the session family | `revoked` flag + `family` | `refresh.concurrency` |
+| Global logout invalidates access + refresh tokens, race-safe | `sessionVersion` in MongoDB; successor inherits consumed token's `sv` | `refresh.concurrency` (30 logout-vs-refresh races) |
+| JWT: HS256 pinned, expiry, token type, secrets required (>=32 chars, distinct) | `src/utils/tokens.js`, `src/config/env.js` | `tests/auth-flow.test.js` |
+| Role from database each request | `authenticate` loads the user | `auth-flow` (tampered claim, demotion) |
+| Passwords: bcrypt cost 12; >72 bytes rejected, not truncated | `schemas.js` | `auth-flow` |
+| Login throttling: Redis atomic counter + Mongo account lockout | Lua INCR/PEXPIRE; `$inc` | `tests/bruteforce.test.js`, `auth-flow` |
+| TOTP single-use, throttled, re-auth to disable | `twoFactorLastStep`, Redis limiter, password on disable | `tests/twofactor.test.js` |
+| One account per email under concurrency | unique index | `registration.security` (20 concurrent signups) |
 
-Node.js, Express, MongoDB (Mongoose), Redis (ioredis), JWT, bcrypt, TOTP
-(speakeasy), pino, Docker, GitHub Actions.
+## Failure behaviour
+* Redis down: login limiter **fails open** (Mongo lockout still applies); 2FA code limiter **fails closed** (503); authorization doesn't use Redis. (Tested by forcing Redis calls to reject, not by stopping Redis.)
+* Rotation succeeds but the response is lost: the client must log in again; no server retry.
 
-## Getting started
+## Testing
+```
+npm ci --legacy-peer-deps
+# needs MongoDB and Redis reachable (defaults: mongodb://127.0.0.1:27017/authforge_test, redis://127.0.0.1:6379)
+npm test
+```
+The suite **fails** if either service is unreachable; it refuses to run against a database whose URI doesn't contain `test`, and flushes the Redis DB between tests, so point it at a disposable instance. 5 suites, 66 tests (registration/mass-assignment, refresh + concurrency + global logout, auth flow/RBAC/JWT/password/errors/config, brute force, TOTP). CI (`.github/workflows/ci.yml`) runs them against `mongo:7` and `redis:7` service containers, plus `npm audit` and a Docker Compose smoke test.
 
-### With Docker (recommended)
+### Adversarial checks performed
+Each protection was disabled one at a time and the relevant suite re-run (then reverted). Every mutation made tests fail:
 
-```bash
-cp .env.example .env   # fill in real JWT secrets
+| Mutation | Result |
+|---|---|
+| signup accepts `role` from body | 2 tests failed |
+| refresh changed to read-then-write | 3 failed |
+| `sessionVersion` check removed | 3 failed |
+| used refresh tokens accepted (`revoked:false` filter removed) | 5 failed |
+| `authorize` disabled | 4 failed |
+| login limiter never blocks | 4 failed |
+| failed-login counter not incremented | 2 failed |
+| weak-secret check removed | 1 failed |
+| TOTP replay check removed | 2 failed |
+| JWT algorithm allow-list widened | 1 failed |
+| 2FA login throttle removed | 2 failed |
+
+These were manual one-off runs, not an automated mutation-testing tool.
+
+## Quick start
+```
+cp .env.example .env     # then set JWT_ACCESS_SECRET and JWT_REFRESH_SECRET (>=32 chars, different)
 docker compose up --build
+# create the first admin (operator action, not an HTTP endpoint):
+docker compose exec -e ADMIN_EMAIL=you@example.com -e ADMIN_PASSWORD='...' auth-service node scripts/create-admin.js
 ```
-
-The service comes up on `http://localhost:5000`, alongside its own MongoDB
-and Redis containers.
-
-### Locally, without Docker
-
-Requires a running MongoDB and Redis instance (update `.env` accordingly).
-
-```bash
-npm install
-cp .env.example .env
-npm run dev
-```
+Without Docker: run MongoDB and Redis locally, `npm start`. Compose runs with `NODE_ENV=production`, so the refresh cookie is `Secure` and browsers won't send it over plain HTTP; use a TLS proxy or `NODE_ENV=development` for local HTTP. Mongo/Redis ports are not published to the host by Compose.
 
 ## API
+OpenAPI at `/api/docs` (source: `openapi.yaml`). Endpoints: `POST /api/auth/{register,login,refresh,logout,logout-all}`, `GET /api/auth/me`, `POST /api/auth/2fa/{setup,verify,disable,login-verify}`, `GET /api/dashboard`, `GET /api/admin/users`, `PATCH /api/admin/users/:id/role`.
 
-| Method | Route                     | Auth           | Description                          |
-|--------|----------------------------|----------------|---------------------------------------|
-| POST   | `/api/auth/register`       | —              | Create an account                     |
-| POST   | `/api/auth/login`          | —              | Log in, get access token or 2FA challenge |
-| POST   | `/api/auth/2fa/setup`      | access token   | Begin 2FA enrollment, returns QR code |
-| POST   | `/api/auth/2fa/verify`     | access token   | Confirm enrollment with a TOTP code   |
-| POST   | `/api/auth/2fa/login-verify`| —             | Complete login for a 2FA account      |
-| POST   | `/api/auth/2fa/disable`    | access token   | Disable 2FA (requires a valid code)   |
-| POST   | `/api/auth/refresh`        | refresh cookie | Rotate refresh token, get new access token |
-| POST   | `/api/auth/logout`         | —              | Revoke current refresh token          |
-| POST   | `/api/auth/logout-all`     | access token   | Revoke all sessions for this user     |
-| GET    | `/api/auth/me`             | access token   | Current user profile                  |
-| GET    | `/api/dashboard`           | access token   | Example authenticated route           |
-| GET    | `/api/admin/users`         | admin only     | List all users                        |
-| PATCH  | `/api/admin/users/:id/role`| admin only     | Change a user's role                  |
+## Limitations
+No reuse-triggered session revocation, small logout-vs-rotation gap, plaintext TOTP secrets, no recovery codes, password reset or email verification, in-memory global API limiter, tested on a standalone `mongod` only, no external security review. Full list: [SECURITY_MODEL.md](SECURITY_MODEL.md).
 
-Full interactive docs: run the service and visit `/api/docs`.
-
-## Tests
-
-```bash
-npm test               # Jest suite — bcrypt, JWT, RBAC, 2FA, Redis rate limiting
-npm run test:integration  # full-stack smoke test against REAL MongoDB + Redis
+## Repository map
 ```
-
-`npm test` covers registration, login, RBAC enforcement, refresh rotation
-(including a 20-concurrent-request replay test that proves exactly one
-rotation succeeds and the other 19 are rejected as already-revoked), the
-full TOTP 2FA lifecycle (enroll → challenge → verify → disable), the
-Redis-backed login rate limiter, and global logout — 20 tests, all exercising
-real bcrypt hashing, real JWT signing/verification, real TOTP codes, and a
-real Redis instance.
-
-**Note on the test double for MongoDB:** the persistence layer for `User` and
-`RefreshToken` is swapped for an in-memory double during `npm test` (see
-`src/models/__mocks__/`), matching the exact Mongoose method surface the app
-uses. This was a pragmatic call made in a network-restricted sandbox that
-couldn't download a `mongodb-memory-server` binary. The gap is closed in CI:
-`.github/workflows/ci.yml` runs `npm run test:integration`, a separate script
-that boots the real (unmocked) app against actual MongoDB and Redis service
-containers and drives the whole flow — register, login, RBAC, and the full
-2FA cycle — over real HTTP.
-
-## Project structure
-
-```
-src/
-  config/       env loading, Mongo connection, Redis client
-  controllers/  route handlers (business logic)
-  middleware/   auth, RBAC, rate limiting, validation, error handling
-  models/       Mongoose schemas (User, RefreshToken)
-  routes/       Express route definitions
-  utils/        JWT helpers, Joi schemas
-tests/          Jest + Supertest integration tests
+src/controllers  auth + 2FA handlers      src/middleware  authenticate, authorize, Redis limiters, validate
+src/models       User, RefreshToken       src/utils       tokens, totp, schemas, audit
+scripts/create-admin.js                   tests/          real-MongoDB/Redis suites
+docs/ARCHITECTURE.md  SECURITY_MODEL.md  INTERVIEW_NOTES.md  RESUME_BULLETS.md
 ```
